@@ -46,10 +46,10 @@ def search_papers(query, max_results=5):
     for source_name, search_function in sources:
         try:
             results = search_function(query, max_results=max_results)
-            print(f"{source_name}: {len(results)} makale bulundu")
+            print(f"{source_name}: {len(results)} papers found")
             all_papers.extend(results)
         except Exception as error:
-            print(f"{source_name} başarısız oldu: {error}")
+            print(f"{source_name} failed: {error}")
 
     unique_papers = deduplicate(all_papers)
 
@@ -62,9 +62,9 @@ def search_papers(query, max_results=5):
 if __name__ == "__main__":
     papers = search_papers("retrieval augmented generation", max_results=5)
 
-    print(f"\nToplam {len(papers)} tekil makale\n")
+    print(f"\nAll {len(papers)} single paper\n")
 
     for index, paper in enumerate(papers, start=1):
         print(f"{index}. {paper['title']}")
-        print(f"   Kaynak: {paper['source']} | Atıf: {paper['citation_count']}")
+        print(f"   Sources: {paper['source']} | Atıf: {paper['citation_count']}")
         print()
