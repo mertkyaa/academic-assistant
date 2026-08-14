@@ -82,7 +82,7 @@ def execute_tool(tool_name: str, tool_input: dict):
     else:
         return {"error": f"Unknown tool: {tool_name}"}
     
-def run_agent(user_message: str, max_turns: int = 8) -> str:
+def run_search_agent(user_message: str, max_turns: int = 8) -> str:
     print(f"\nUser: {user_message}\n")
 
     messages = [
