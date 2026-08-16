@@ -13,7 +13,7 @@ class SearchRequest(BaseModel):
 
 class SearchResponse(BaseModel):
     topic: str
-    summary: str
+    synthesis: dict
     paper_count: int
 
 # App 
@@ -40,14 +40,14 @@ def search_endpoint(request: SearchRequest):
         scored = run_filter_agent(papers, request.topic)
 
         # 3. Summary — öğrenci diliyle özetle
-        summary = run_summary_agent(scored, request.topic)
+        synthesis = run_summary_agent(scored, request.topic)
 
         # CrewAI alternatifi: from crew_pipeline import run_crew
         #                     result = run_crew(request.topic)
 
         return SearchResponse(
             topic=request.topic,
-            summary=summary,
+            synthesis=synthesis,
             paper_count=len(scored)
         )
 

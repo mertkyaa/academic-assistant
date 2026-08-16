@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --font-academic: "Merriweather", Georgia, serif;
+  --font-heading: "Inter", system-ui, sans-serif;
+}
