@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from paper_search import search_papers
 from filter_agent import run_filter_agent
 from summary_agent import run_summary_agent
+from evidence_agent import run_evidence_agent
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -39,8 +40,12 @@ def search_endpoint(request: SearchRequest):
         # 2. Filter — alakaya göre puanla
         scored = run_filter_agent(papers, request.topic)
 
-        # 3. Summary — öğrenci diliyle özetle
-        synthesis = run_summary_agent(scored, request.topic)
+        # 3. Evidence -> Kaliteyi artır
+
+        enriched = run_evidence_agent(scored, request.topic)
+
+        # 4. Öğrenci diliyle özetle
+        synthesis = run_summary_agent(enriched, request.topic)
 
         # CrewAI alternatifi: from crew_pipeline import run_crew
         #                     result = run_crew(request.topic)

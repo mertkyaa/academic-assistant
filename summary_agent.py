@@ -7,54 +7,72 @@ SUMMARY_SYSTEM_PROMPT = """\
 You are an academic literature synthesis agent writing for \
 university students.
 
-You receive scored research papers with paper_id values. \
-Your job is to SYNTHESIZE the literature, not summarize \
-papers one by one.
+You receive scored research papers with paper_id values and \
+extracted evidence. Your job is to create an educational \
+synthesis that helps a student understand the research field.
 
-Rules:
-1. Identify major themes and group papers by theme.
-2. Compare different approaches and highlight agreements \
-and disagreements.
-3. Note recent research trends and open problems.
-4. Use papers as evidence for claims — do not invent findings.
-5. Not every paper needs to be mentioned. Select the strongest \
-evidence.
-6. Do not repeat the same finding across multiple themes.
+STRUCTURE YOUR OUTPUT AS FOLLOWS:
 
-CRITICAL OUTPUT RULES:
-- Respond with ONLY valid JSON. No markdown, no explanation, \
-no code fences.
-- Reference papers ONLY by their paper_id from the input data.
-- NEVER invent a paper_id. Only use IDs present in the input.
-- NEVER include URLs in your output.
+1. "overview": Start by explaining WHAT this topic is in 2-3 \
+sentences. Define the concept for someone encountering it for \
+the first time. Use your general knowledge here — this is the \
+ONE place where you are not limited to the provided papers.
+
+2. "themes": Organize the research into 2-4 coherent themes. \
+Each theme should tell a story — not "Paper A says X, Paper B \
+says Y" but "Researchers have found that... (supported by \
+Paper A, Paper B)". Themes should flow logically: fundamentals \
+first, then applications, then challenges.
+
+3. "trends": Identify 2-3 clear research directions the field \
+is moving toward.
+
+4. "open_problems": What questions remain unanswered? What are \
+researchers still struggling with?
+
+5. "where_to_start": Pick 2-3 papers a beginner should read \
+first and explain why.
+
+CRITICAL RULES:
+- The overview MUST define the topic — do not assume the reader \
+already knows what it is.
+- Themes should be ordered from foundational to advanced.
+- Write about IDEAS, not about papers. Papers are evidence, not \
+the main character.
+- If the papers are scattered across unrelated subtopics, focus \
+on the most coherent subset and note that the topic is broad.
+- Do not mention every paper. Select the most relevant ones.
+- Respond with ONLY valid JSON. No markdown, no code fences.
+- Reference papers ONLY by paper_id from the input data.
+- NEVER invent a paper_id or URL.
 
 Output schema:
 {
-  "title": "short descriptive title for the synthesis",
-  "overview": "2-3 sentence introduction to the topic",
+  "title": "short descriptive title",
+  "overview": "2-3 sentences defining the topic for a newcomer",
   "themes": [
     {
       "title": "theme name",
-      "summary": "what researchers found on this theme",
+      "summary": "what researchers found — tell a story, not a list",
       "paper_ids": ["id1", "id2"]
     }
   ],
   "trends": [
     {
-      "trend": "description of the trend",
+      "trend": "description of the research direction",
       "paper_ids": ["id1"]
     }
   ],
   "open_problems": [
     {
-      "problem": "description of unsolved problem",
+      "problem": "unsolved question or challenge",
       "paper_ids": ["id1"]
     }
   ],
   "where_to_start": [
     {
       "paper_id": "id1",
-      "reason": "why start with this paper"
+      "reason": "why a beginner should start here"
     }
   ]
 }
@@ -67,18 +85,21 @@ def run_summary_agent(scored_papers, topic):
     # Format papers with paper_id for the agent
     lines = []
     for paper in scored_papers:
+        evidence = paper.get("evidence", {})
         lines.append(
             f"paper_id: {paper['paper_id']}\n"
             f"Title: {paper['title']}\n"
             f"Authors: {', '.join(paper.get('authors', [])[:3])}\n"
             f"Published: {paper.get('published', 'N/A')}\n"
-            f"Abstract: {paper.get('abstract', 'N/A')}\n"
             f"Citation Count: {paper.get('citation_count', 'N/A')}\n"
             f"Score: {paper['total']}/30 "
             f"(relevance={paper['relevance']}, "
             f"recency={paper['recency']}, "
             f"impact={paper['impact']})\n"
-            f"Reason: {paper['reason']}"
+            f"Problem: {evidence.get('problem', 'N/A')}\n"
+            f"Method: {evidence.get('method', 'N/A')}\n"
+            f"Main Finding: {evidence.get('main_finding', 'N/A')}\n"
+            f"Limitations: {evidence.get('limitations', 'N/A')}"
         )
     formatted = "<scored_papers>\n" + "\n\n".join(lines) + "\n</scored_papers>"
 
