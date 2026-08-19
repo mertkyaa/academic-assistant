@@ -1,8 +1,12 @@
+import os
 import bcrypt
 import jwt
 import datetime
+from dotenv import load_dotenv
 
-SECRET_KEY = "your-secret-key-change-this-in-production-1234"
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production-1234")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
