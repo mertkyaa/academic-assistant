@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react"
 
+const API_URL = import.meta.env.VITE_API_URL
+
 const TOPICS = [
   "machine learning",
   "deep learning",
@@ -91,8 +93,8 @@ function App() {
     setAuthError("")
 
     const url = authMode === "login"
-      ? "http://localhost:8000/api/login"
-      : "http://localhost:8000/api/register"
+      ? API_URL + "/api/login"
+      : API_URL + "/api/register"
 
     try {
       const response = await fetch(url, {
@@ -165,7 +167,7 @@ function App() {
     setSelectedIndex(-1)
 
     try {
-      const response = await fetch("http://localhost:8000/api/search", {
+      const response = await fetch(API_URL + "/api/search", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
