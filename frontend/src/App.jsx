@@ -24,6 +24,8 @@ const TOPICS = [
 ]
 
 const RECENT_KEY = "academic-assistant-recent"
+const TOKEN_KEY = "academic-assistant-token"
+const EMAIL_KEY = "academic-assistant-email"
 const MAX_RECENT = 5
 
 function App() {
@@ -35,13 +37,43 @@ function App() {
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const [recentSearches, setRecentSearches] = useState([])
 
-  // Load recent searches on mount
+  // Auth state
+  const [token, setToken] = useState(null)
+  const [userEmail, setUserEmail] = useState("")
+  const [authEmail, setAuthEmail] = useState("")
+  const [authPassword, setAuthPassword] = useState("")
+  const [authMode, setAuthMode] = useState("login")
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState("")
+  const [showAuthModal, setShowAuthModal] = useState(false)
+
+  // Load token and recent searches on mount
   useEffect(() => {
+    try {
+      const savedToken = localStorage.getItem(TOKEN_KEY)
+      const savedEmail = localStorage.getItem(EMAIL_KEY)
+      if (savedToken) {
+        setToken(savedToken)
+        setUserEmail(savedEmail || "")
+      }
+    } catch {}
+
     try {
       const saved = localStorage.getItem(RECENT_KEY)
       if (saved) setRecentSearches(JSON.parse(saved))
     } catch {}
   }, [])
+
+  // Show auth modal after 3 seconds if not logged in
+  useEffect(() => {
+    if (token) return
+
+    const timer = setTimeout(() => {
+      setShowAuthModal(true)
+    }, 3000)
+
+    return () => clearTimeout(timer)
+  }, [token])
 
   // Save to recent searches
   function addToRecent(query) {
@@ -49,6 +81,54 @@ function App() {
       .slice(0, MAX_RECENT)
     setRecentSearches(updated)
     localStorage.setItem(RECENT_KEY, JSON.stringify(updated))
+  }
+
+  // Auth handlers
+  async function handleAuth() {
+    if (!authEmail.trim() || !authPassword.trim()) return
+
+    setAuthLoading(true)
+    setAuthError("")
+
+    const url = authMode === "login"
+      ? "http://localhost:8000/api/login"
+      : "http://localhost:8000/api/register"
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Authentication failed")
+      }
+
+      setToken(data.token)
+      setUserEmail(data.email)
+      localStorage.setItem(TOKEN_KEY, data.token)
+      localStorage.setItem(EMAIL_KEY, data.email)
+      setShowAuthModal(false)
+    } catch (err) {
+      setAuthError(err.message)
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  function handleLogout() {
+    setToken(null)
+    setUserEmail("")
+    localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(EMAIL_KEY)
+    setSynthesis(null)
+    setAuthEmail("")
+    setAuthPassword("")
+    setAuthError("")
+    setShowAuthModal(true)
   }
 
   // Filtered autocomplete suggestions
@@ -72,6 +152,12 @@ function App() {
     const query = (searchTopic || topic).trim()
     if (query.length < 5) return
 
+    // Token yoksa modal aç
+    if (!token) {
+      setShowAuthModal(true)
+      return
+    }
+
     setLoading(true)
     setSynthesis(null)
     setError("")
@@ -81,9 +167,17 @@ function App() {
     try {
       const response = await fetch("http://localhost:8000/api/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + token
+        },
         body: JSON.stringify({ topic: query })
       })
+
+      if (response.status === 401) {
+        handleLogout()
+        return
+      }
 
       if (!response.ok) {
         throw new Error("Server error: " + response.status)
@@ -259,8 +353,94 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-100">
+
+      {/* AUTH MODAL */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
+          <div className="relative bg-white rounded-xl shadow-2xl p-8 w-full
+                          max-w-sm mx-4">
+            <h2 className="text-xl font-bold text-gray-800 text-center mb-1
+                           font-heading">
+              {authMode === "login" ? "Welcome Back" : "Create Account"}
+            </h2>
+            <p className="text-gray-500 text-sm text-center mb-5">
+              Sign in to search and save your history
+            </p>
+
+            {authError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3
+                              mb-4 text-red-700 text-sm text-center">
+                {authError}
+              </div>
+            )}
+
+            <input
+              type="email"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              placeholder="Email"
+              className="w-full border border-gray-300 rounded-lg px-4 py-2.5
+                         mb-3 focus:outline-none focus:ring-2
+                         focus:ring-blue-500 text-sm"
+            />
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleAuth() }}
+              placeholder="Password"
+              className="w-full border border-gray-300 rounded-lg px-4 py-2.5
+                         mb-4 focus:outline-none focus:ring-2
+                         focus:ring-blue-500 text-sm"
+            />
+            <button
+              onClick={handleAuth}
+              disabled={authLoading}
+              className="w-full bg-blue-600 text-white py-2.5 rounded-lg
+                         font-medium hover:bg-blue-700 disabled:bg-blue-400
+                         disabled:cursor-not-allowed text-sm"
+            >
+              {authLoading
+                ? "Please wait..."
+                : authMode === "login" ? "Sign In" : "Create Account"
+              }
+            </button>
+
+            <p className="text-center text-xs text-gray-500 mt-4">
+              {authMode === "login"
+                ? "Don't have an account? "
+                : "Already have an account? "
+              }
+              <button
+                onClick={() => {
+                  setAuthMode(authMode === "login" ? "register" : "login")
+                  setAuthError("")
+                }}
+                className="text-blue-600 hover:underline font-medium"
+              >
+                {authMode === "login" ? "Sign Up" : "Sign In"}
+              </button>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* HEADER */}
       <div className="bg-gradient-to-r from-blue-700 to-indigo-800
-                      text-white py-10 px-4 text-center">
+                      text-white py-10 px-4 text-center relative">
+        {token && (
+          <div className="absolute top-4 right-4 flex items-center gap-3">
+            <span className="text-blue-200 text-sm">{userEmail}</span>
+            <button
+              onClick={handleLogout}
+              className="text-sm bg-white/20 hover:bg-white/30 px-3 py-1
+                         rounded-lg transition-colors"
+            >
+              Logout
+            </button>
+          </div>
+        )}
         <h1 className="text-4xl font-bold tracking-tight font-heading">
           Academic Paper Assistant
         </h1>
@@ -269,6 +449,7 @@ function App() {
         </p>
       </div>
 
+      {/* MAIN CONTENT */}
       <div className="max-w-3xl mx-auto mt-10 px-4">
         <div className="flex gap-2 relative">
           <input

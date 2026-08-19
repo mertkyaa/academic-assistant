@@ -1,12 +1,16 @@
-from fastapi import FastAPI, HTTPException
+import json
+from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from query_utils import preprocess_query
 
 from paper_search import search_papers
 from filter_agent import run_filter_agent
-from summary_agent import run_summary_agent
 from evidence_agent import run_evidence_agent
+from summary_agent import run_summary_agent
+from database import init_db, create_user, get_user_by_email, save_search, get_user_history
+from auth import hash_password, verify_password, create_token, verify_token
 
-from fastapi.middleware.cors import CORSMiddleware
 
 # Pydantic models
 class SearchRequest(BaseModel):
@@ -17,7 +21,16 @@ class SearchResponse(BaseModel):
     synthesis: dict
     paper_count: int
 
-# App 
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+# App
 app = FastAPI()
 
 app.add_middleware(
@@ -27,28 +40,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+init_db()
+
+
+def get_current_user(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    token = authorization.split(" ")[1]
+    user_id = verify_token(token)
+
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    return user_id
+
+
 @app.get("/")
 def health_check():
     return {"status": "ok", "message": "Academic Assistant API is running"}
 
+
+@app.post("/api/register")
+def register_endpoint(request: RegisterRequest):
+    existing = get_user_by_email(request.email)
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    hashed = hash_password(request.password)
+    user = create_user(request.email, hashed)
+    token = create_token(user["id"])
+
+    return {"message": "Registration successful", "token": token, "email": user["email"]}
+
+
+@app.post("/api/login")
+def login_endpoint(request: LoginRequest):
+    user = get_user_by_email(request.email)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not verify_password(request.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_token(user["id"])
+    return {"message": "Login successful", "token": token, "email": user["email"]}
+
+
 @app.post("/api/search", response_model=SearchResponse)
-def search_endpoint(request: SearchRequest):
+def search_endpoint(request: SearchRequest, user_id: int = Depends(get_current_user)):
     try:
-        # 1. Search — üç kaynaktan makale çek
-        papers = search_papers(request.topic)
-
-        # 2. Filter — alakaya göre puanla
-        scored = run_filter_agent(papers, request.topic)
-
-        # 3. Evidence -> Kaliteyi artır
-
-        enriched = run_evidence_agent(scored, request.topic)
-
-        # 4. Öğrenci diliyle özetle
-        synthesis = run_summary_agent(enriched, request.topic)
-
-        # CrewAI alternatifi: from crew_pipeline import run_crew
-        #                     result = run_crew(request.topic)
+        papers = search_papers(topic)
+        scored = run_filter_agent(papers, topic)
+        enriched = run_evidence_agent(scored, topic)
+        synthesis = run_summary_agent(enriched, topic)
+        save_search(user_id, request.topic, json.dumps(synthesis), len(scored))
 
         return SearchResponse(
             topic=request.topic,
@@ -59,3 +105,8 @@ def search_endpoint(request: SearchRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/history")
+def history_endpoint(user_id: int = Depends(get_current_user)):
+    history = get_user_history(user_id)
+    return {"history": history}
