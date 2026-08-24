@@ -30,10 +30,21 @@ const TOKEN_KEY = "academic-assistant-token"
 const EMAIL_KEY = "academic-assistant-email"
 const MAX_RECENT = 5
 
+// Rough stages of the backend pipeline, shown one after another during the
+// (slow) search so the user knows work is happening rather than staring at a
+// frozen skeleton.
+const LOADING_STAGES = [
+  "Searching papers…",
+  "Filtering relevant work…",
+  "Gathering evidence…",
+  "Writing the summary…",
+]
+
 function App() {
   const [topic, setTopic] = useState("")
   const [synthesis, setSynthesis] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadingStage, setLoadingStage] = useState(0)
   const [error, setError] = useState("")
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(-1)
@@ -149,6 +160,18 @@ function App() {
   useEffect(() => {
     setSelectedIndex(-1)
   }, [topic])
+
+  // Advance the loading stage message while a search runs; reset when it ends.
+  useEffect(() => {
+    if (!loading) {
+      setLoadingStage(0)
+      return
+    }
+    const id = setInterval(() => {
+      setLoadingStage((s) => (s < LOADING_STAGES.length - 1 ? s + 1 : s))
+    }, 8000)
+    return () => clearInterval(id)
+  }, [loading])
 
   async function handleSearch(searchTopic) {
     const query = (searchTopic || topic).trim()
@@ -557,6 +580,12 @@ function App() {
 
         {loading && (
           <div className="mt-8 space-y-6">
+            <div className="flex items-center justify-center gap-2 text-sm
+                            text-gray-500">
+              <span className="inline-block w-2 h-2 rounded-full bg-indigo-500
+                               animate-pulse"></span>
+              {LOADING_STAGES[loadingStage]}
+            </div>
             <SkeletonCard />
             <SkeletonTheme />
             <SkeletonTheme />

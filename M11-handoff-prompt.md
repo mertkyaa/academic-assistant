@@ -98,10 +98,10 @@ git rm --cached academic.db
 - `ANTHROPIC_API_KEY` — Claude API
 - `SEMANTIC_SCHOLAR_KEY` — Semantic Scholar API
 - `SECRET_KEY` — JWT imzalama
-- `DATABASE_URL` — PostgreSQL internal URL: `postgresql://postgres:<REDACTED>@postgres-bf.railway.internal:5432/railway`
+- `DATABASE_URL` — PostgreSQL internal URL (gerçek değer Railway panelinde; repoda tutma): `postgresql://postgres:<REDACTED>@postgres-bf.railway.internal:5432/railway`
 
 ### PostgreSQL Public URL (local dev için)
-`postgresql://postgres:<REDACTED>@altaria.proxy.rlwy.net:22882/railway`
+Gerçek bağlantı dizesi Railway panelinden alınır, repoya yazılmaz: `postgresql://postgres:<REDACTED>@altaria.proxy.rlwy.net:22882/railway`
 
 ### Railway Backend URL
 `https://academic-assistant-production-35e4.up.railway.app`
