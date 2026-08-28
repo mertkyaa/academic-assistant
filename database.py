@@ -26,6 +26,15 @@ def init_db():
         )
     """)
 
+    # Migration: add the username column to any pre-existing users table.
+    # Legacy rows keep NULL username; case-insensitive uniqueness is enforced
+    # via an index (NULLs are treated as distinct, so old rows don't collide).
+    cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT")
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx "
+        "ON users (LOWER(username))"
+    )
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS search_history (
             id SERIAL PRIMARY KEY,
@@ -56,13 +65,13 @@ def init_db():
     print("Database initialized successfully")
 
 
-def create_user(email, password_hash):
+def create_user(email, password_hash, username=None):
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO users (email, password_hash) VALUES (%s, %s)",
-            (email, password_hash)
+            "INSERT INTO users (email, password_hash, username) VALUES (%s, %s, %s)",
+            (email, password_hash, username)
         )
         conn.commit()
         cursor.execute(
@@ -83,6 +92,68 @@ def get_user_by_email(email):
         )
         user = cursor.fetchone()
         return dict(user) if user else None
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        return dict(user) if user else None
+    finally:
+        conn.close()
+
+
+def get_user_by_username(username):
+    """Case-insensitive lookup so usernames are unique regardless of casing."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM users WHERE LOWER(username) = LOWER(%s)", (username,)
+        )
+        user = cursor.fetchone()
+        return dict(user) if user else None
+    finally:
+        conn.close()
+
+
+def update_username(user_id, username):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET username = %s WHERE id = %s", (username, user_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_password(user_id, password_hash):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (password_hash, user_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_user(user_id):
+    """Delete a user and their search history (history has a FK to users)."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM search_history WHERE user_id = %s", (user_id,))
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
     finally:
         conn.close()
 

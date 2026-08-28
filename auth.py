@@ -6,7 +6,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production-1234")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    # Fail loudly instead of silently signing tokens with a guessable default,
+    # which would let anyone forge auth tokens.
+    raise RuntimeError(
+        "SECRET_KEY environment variable is not set. "
+        "Set it in your .env (local) and in Railway (production)."
+    )
+
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 

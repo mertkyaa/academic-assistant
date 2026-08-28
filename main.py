@@ -19,6 +19,7 @@ from summary_agent import run_summary_agent
 from database import (
     init_db, create_user, get_user_by_email, save_search, get_user_history,
     get_cached_search, save_to_cache,
+    get_user_by_id, get_user_by_username, update_username, update_password, delete_user,
 )
 from auth import hash_password, verify_password, create_token, verify_token
 
@@ -35,6 +36,14 @@ ALLOWED_ORIGINS = [
 ]
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,30}$")
+
+
+def _validate_username(v):
+    v = v.strip()
+    if not USERNAME_RE.match(v):
+        raise ValueError("Username must be 3-30 characters: letters, numbers, _ or -")
+    return v
 
 
 # Pydantic models
@@ -51,6 +60,7 @@ class SearchResponse(BaseModel):
 class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=8, max_length=128)
+    username: str
 
     @field_validator("email")
     @classmethod
@@ -59,6 +69,11 @@ class RegisterRequest(BaseModel):
         if not EMAIL_RE.match(v):
             raise ValueError("Invalid email format")
         return v
+
+    @field_validator("username")
+    @classmethod
+    def valid_username(cls, v):
+        return _validate_username(v)
 
 
 class LoginRequest(BaseModel):
@@ -69,6 +84,20 @@ class LoginRequest(BaseModel):
     @classmethod
     def normalize_email(cls, v):
         return v.strip().lower()
+
+
+class UpdateProfileRequest(BaseModel):
+    username: str
+
+    @field_validator("username")
+    @classmethod
+    def valid_username(cls, v):
+        return _validate_username(v)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 # App
@@ -108,18 +137,34 @@ def health_check():
     return {"status": "ok", "message": "Academic Assistant API is running"}
 
 
+def _public_user(user):
+    """User fields safe to send to the client (never the password hash)."""
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "username": user.get("username"),
+        "created_at": user["created_at"],
+    }
+
+
 @app.post("/api/register")
 @limiter.limit("5/hour")
 def register_endpoint(request: Request, payload: RegisterRequest):
-    existing = get_user_by_email(payload.email)
-    if existing:
+    if get_user_by_email(payload.email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    if get_user_by_username(payload.username):
+        raise HTTPException(status_code=400, detail="Username already taken")
 
     hashed = hash_password(payload.password)
-    user = create_user(payload.email, hashed)
+    user = create_user(payload.email, hashed, payload.username)
     token = create_token(user["id"])
 
-    return {"message": "Registration successful", "token": token, "email": user["email"]}
+    return {
+        "message": "Registration successful",
+        "token": token,
+        "email": user["email"],
+        "username": user["username"],
+    }
 
 
 @app.post("/api/login")
@@ -133,7 +178,48 @@ def login_endpoint(request: Request, payload: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_token(user["id"])
-    return {"message": "Login successful", "token": token, "email": user["email"]}
+    return {
+        "message": "Login successful",
+        "token": token,
+        "email": user["email"],
+        "username": user.get("username"),
+    }
+
+
+@app.get("/api/me")
+def get_me(user_id: int = Depends(get_current_user)):
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _public_user(user)
+
+
+@app.patch("/api/me")
+def update_me(payload: UpdateProfileRequest, user_id: int = Depends(get_current_user)):
+    existing = get_user_by_username(payload.username)
+    if existing and existing["id"] != user_id:
+        raise HTTPException(status_code=400, detail="Username already taken")
+
+    update_username(user_id, payload.username)
+    return _public_user(get_user_by_id(user_id))
+
+
+@app.post("/api/me/password")
+@limiter.limit("5/minute")
+def change_password_endpoint(request: Request, payload: ChangePasswordRequest,
+                             user_id: int = Depends(get_current_user)):
+    user = get_user_by_id(user_id)
+    if not user or not verify_password(payload.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    update_password(user_id, hash_password(payload.new_password))
+    return {"message": "Password updated successfully"}
+
+
+@app.delete("/api/me")
+def delete_me(user_id: int = Depends(get_current_user)):
+    delete_user(user_id)
+    return {"message": "Account deleted"}
 
 
 @app.post("/api/search", response_model=SearchResponse)
