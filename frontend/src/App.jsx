@@ -79,6 +79,15 @@ function App() {
   const [authLoading, setAuthLoading] = useState(false)
   const [authError, setAuthError] = useState("")
   const [showAuthModal, setShowAuthModal] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [authInfo, setAuthInfo] = useState("")   // green info message (e.g. reset link sent)
+
+  // Reset-password page state (/reset?token=...)
+  const [resetPw, setResetPw] = useState("")
+  const [resetMsg, setResetMsg] = useState("")
+  const [resetErr, setResetErr] = useState(false)
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetDone, setResetDone] = useState(false)
 
   // Profile modal state
   const [showProfileModal, setShowProfileModal] = useState(false)
@@ -193,6 +202,54 @@ function App() {
     }
   }
 
+  async function handleForgot() {
+    setAuthError(""); setAuthInfo("")
+    const email = authEmail.trim()
+    if (!EMAIL_RE.test(email)) {
+      setAuthError("Please enter a valid email address.")
+      return
+    }
+    setAuthLoading(true)
+    try {
+      const res = await fetch(API_URL + "/api/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      })
+      const data = await res.json()
+      // Always a generic message (server never reveals whether the email exists).
+      setAuthInfo(data.message || "If that email is registered, a reset link has been sent.")
+    } catch {
+      setAuthError("Something went wrong. Please try again.")
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  async function handleReset() {
+    setResetMsg(""); setResetErr(false)
+    if (resetPw.length < 8) {
+      setResetErr(true); setResetMsg("Password must be at least 8 characters.")
+      return
+    }
+    setResetBusy(true)
+    try {
+      const res = await fetch(API_URL + "/api/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, new_password: resetPw })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(apiErrorMessage(data, "Could not reset password"))
+      setResetDone(true); setResetErr(false)
+      setResetMsg(data.message || "Password updated. You can now sign in.")
+    } catch (err) {
+      setResetErr(true); setResetMsg(err.message)
+    } finally {
+      setResetBusy(false)
+    }
+  }
+
   function handleLogout() {
     setToken(null)
     setUserEmail("")
@@ -204,6 +261,7 @@ function App() {
     setAuthEmail("")
     setAuthPassword("")
     setAuthError("")
+    setAuthMode("login")
     setShowProfileModal(false)
     setShowAuthModal(true)
   }
@@ -553,6 +611,76 @@ function App() {
     ? Object.keys(synthesis.papers).length
     : 0
 
+  // Password-reset page: shown when the user opens the emailed /reset?token=... link.
+  const isResetPage = typeof window !== "undefined" && window.location.pathname === "/reset"
+  const resetToken = isResetPage
+    ? new URLSearchParams(window.location.search).get("token")
+    : null
+
+  if (isResetPage) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
+        <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-sm">
+          <h1 className="text-xl font-bold text-gray-800 text-center mb-1 font-heading">
+            Reset Password
+          </h1>
+          {!resetToken ? (
+            <p className="text-sm text-red-600 text-center mt-3">
+              This reset link is invalid or incomplete.
+            </p>
+          ) : resetDone ? (
+            <div className="text-center mt-4">
+              <p className="text-sm text-green-600 mb-4">{resetMsg}</p>
+              <a href="/" className="inline-block bg-blue-600 text-white px-4 py-2
+                                     rounded-lg text-sm font-medium hover:bg-blue-700">
+                Go to sign in
+              </a>
+            </div>
+          ) : (
+            <>
+              <p className="text-gray-500 text-sm text-center mb-5">
+                Choose a new password for your account.
+              </p>
+              {resetMsg && (
+                <p className={`text-xs text-center mb-3 ${resetErr ? "text-red-600" : "text-green-600"}`}>
+                  {resetMsg}
+                </p>
+              )}
+              <div className="relative mb-4">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={resetPw}
+                  onChange={(e) => setResetPw(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleReset() }}
+                  placeholder="New password (min 8 chars)"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2.5
+                             pr-16 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs
+                             text-gray-500 hover:text-gray-700 px-2 py-1"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+              <button
+                onClick={handleReset}
+                disabled={resetBusy}
+                className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-medium
+                           hover:bg-blue-700 disabled:bg-blue-400 text-sm"
+              >
+                {resetBusy ? "Please wait..." : "Set new password"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gray-100">
 
@@ -564,16 +692,26 @@ function App() {
                           max-w-sm mx-4">
             <h2 className="text-xl font-bold text-gray-800 text-center mb-1
                            font-heading">
-              {authMode === "login" ? "Welcome Back" : "Create Account"}
+              {authMode === "login" ? "Welcome Back"
+                : authMode === "register" ? "Create Account"
+                : "Reset Password"}
             </h2>
             <p className="text-gray-500 text-sm text-center mb-5">
-              Sign in to search and save your history
+              {authMode === "forgot"
+                ? "Enter your email and we'll send a reset link."
+                : "Sign in to search and save your history"}
             </p>
 
             {authError && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3
                               mb-4 text-red-700 text-sm text-center">
                 {authError}
+              </div>
+            )}
+            {authInfo && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3
+                              mb-4 text-green-700 text-sm text-center">
+                {authInfo}
               </div>
             )}
 
@@ -597,18 +735,43 @@ function App() {
                          mb-3 focus:outline-none focus:ring-2
                          focus:ring-blue-500 text-sm"
             />
-            <input
-              type="password"
-              value={authPassword}
-              onChange={(e) => setAuthPassword(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleAuth() }}
-              placeholder="Password"
-              className="w-full border border-gray-300 rounded-lg px-4 py-2.5
-                         mb-4 focus:outline-none focus:ring-2
-                         focus:ring-blue-500 text-sm"
-            />
+            {authMode !== "forgot" && (
+              <div className="relative mb-4">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleAuth() }}
+                  placeholder="Password"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2.5
+                             pr-16 focus:outline-none focus:ring-2
+                             focus:ring-blue-500 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs
+                             text-gray-500 hover:text-gray-700 px-2 py-1"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+            )}
+
+            {authMode === "login" && (
+              <div className="text-right -mt-2 mb-4">
+                <button
+                  onClick={() => { setAuthMode("forgot"); setAuthError(""); setAuthInfo("") }}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
             <button
-              onClick={handleAuth}
+              onClick={authMode === "forgot" ? handleForgot : handleAuth}
               disabled={authLoading}
               className="w-full bg-blue-600 text-white py-2.5 rounded-lg
                          font-medium hover:bg-blue-700 disabled:bg-blue-400
@@ -616,24 +779,36 @@ function App() {
             >
               {authLoading
                 ? "Please wait..."
-                : authMode === "login" ? "Sign In" : "Create Account"
+                : authMode === "login" ? "Sign In"
+                : authMode === "register" ? "Create Account"
+                : "Send reset link"
               }
             </button>
 
             <p className="text-center text-xs text-gray-500 mt-4">
-              {authMode === "login"
-                ? "Don't have an account? "
-                : "Already have an account? "
-              }
-              <button
-                onClick={() => {
-                  setAuthMode(authMode === "login" ? "register" : "login")
-                  setAuthError("")
-                }}
-                className="text-blue-600 hover:underline font-medium"
-              >
-                {authMode === "login" ? "Sign Up" : "Sign In"}
-              </button>
+              {authMode === "forgot" ? (
+                <button
+                  onClick={() => { setAuthMode("login"); setAuthError(""); setAuthInfo("") }}
+                  className="text-blue-600 hover:underline font-medium"
+                >
+                  Back to sign in
+                </button>
+              ) : (
+                <>
+                  {authMode === "login"
+                    ? "Don't have an account? "
+                    : "Already have an account? "}
+                  <button
+                    onClick={() => {
+                      setAuthMode(authMode === "login" ? "register" : "login")
+                      setAuthError(""); setAuthInfo("")
+                    }}
+                    className="text-blue-600 hover:underline font-medium"
+                  >
+                    {authMode === "login" ? "Sign Up" : "Sign In"}
+                  </button>
+                </>
+              )}
             </p>
           </div>
         </div>

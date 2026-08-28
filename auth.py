@@ -50,3 +50,25 @@ def verify_token(token):
         return None
     except jwt.InvalidTokenError:
         return None
+
+
+RESET_EXPIRE_MINUTES = 30
+
+
+def create_reset_token(user_id):
+    """Short-lived, single-purpose token used only for password reset links."""
+    expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=RESET_EXPIRE_MINUTES)
+    payload = {"user_id": user_id, "purpose": "reset", "exp": expire}
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_reset_token(token):
+    """Return the user_id for a valid, non-expired reset token, else None.
+    Rejects normal auth tokens (wrong purpose) so they can't reset passwords."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("purpose") != "reset":
+            return None
+        return payload["user_id"]
+    except jwt.InvalidTokenError:
+        return None

@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .DS_Store
 academic.db
+
+# Local test/export artifacts (screenshots, exported PDFs)
+*.pdf
+*.png

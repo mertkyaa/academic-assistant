@@ -79,7 +79,8 @@ export function buildMarkdown(synthesis) {
     out.push("")
   }
 
-  const ids = Object.keys(papers)
+  // Only cite papers that have a real source link — no incomplete entries.
+  const ids = Object.keys(papers).filter((id) => papers[id] && papers[id].url)
   if (ids.length) {
     out.push("## References", "")
     ids.forEach((id, i) => out.push(`${i + 1}. ${referenceText(papers[id])}`))
@@ -122,7 +123,8 @@ export function buildPaperHtml(synthesis) {
         .join("")}</ul>`
     : ""
 
-  const ids = Object.keys(papers)
+  // Only cite papers that have a real source link — no incomplete entries.
+  const ids = Object.keys(papers).filter((id) => papers[id] && papers[id].url)
   const references = ids.length
     ? `<h2>References</h2><ol class="refs">${ids
         .map((id) => `<li>${esc(referenceText(papers[id]))}</li>`)
@@ -130,9 +132,12 @@ export function buildPaperHtml(synthesis) {
     : ""
 
   const css = `
-    @page { margin: 2.2cm; }
+    /* margin:0 removes the browser's own print header/footer (date, page title,
+       the about:blank URL, page numbers). Page margins are recreated with body
+       padding instead. */
+    @page { size: A4; margin: 0; }
     * { box-sizing: border-box; }
-    body { font-family: "Times New Roman", Georgia, serif; color:#111; line-height:1.5; font-size:11pt; margin:0; }
+    body { font-family: "Times New Roman", Georgia, serif; color:#111; line-height:1.5; font-size:11pt; margin:0; padding:1.8cm 2cm; }
     h1.title { text-align:center; font-size:20pt; margin:0 0 6px; }
     .meta { text-align:center; color:#555; font-style:italic; font-size:10pt; margin-bottom:1.6em; }
     h2 { font-size:13pt; border-bottom:1px solid #ccc; padding-bottom:2px; margin:1.4em 0 .4em; }

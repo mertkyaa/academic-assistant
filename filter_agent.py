@@ -5,6 +5,9 @@ from search_agent import format_papers_for_agent
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+# Papers scoring below this relevance are treated as off-topic noise and dropped.
+MIN_RELEVANCE = 6
+
 # Filter System  Agent Prompt
 
 FILTER_SYSTEM_PROMPT = """\
@@ -19,6 +22,11 @@ Score each paper on three criteria (0-10 each):
    5-6  = Partially relevant
    3-4  = Indirectly related
    0-2  = Largely unrelated
+   IMPORTANT: A paper that only matches the topic through a coincidence —
+   a shared acronym (e.g. "ALP" as an axion-like particle vs. the Alps), an
+   author's surname, or a homonym in another field/language — is NOT relevant.
+   Score such papers 0-2 even if the keyword appears. Judge relevance by the
+   paper's actual subject in its abstract, not by surface keyword matches.
 
 2. Recency — How recent is the paper relative to today?
    9-10 = Published within last 2 years
@@ -86,6 +94,7 @@ def run_filter_agent(papers,topic):
 
     # JSON parsing -> Error check
 
+    merged = []
     try:
         raw_text = raw_text.strip()
         if raw_text.startswith("```"):
@@ -101,7 +110,6 @@ def run_filter_agent(papers,topic):
             key = paper["title"].strip().lower()
             title_to_paper[key] = paper
 
-        merged = []
         for item in scored:
             key = item.get("title", "").strip().lower()
             original = title_to_paper.get(key, {})
@@ -110,6 +118,18 @@ def run_filter_agent(papers,topic):
 
     except json.JSONDecodeError:
         print(f"Filter agent returned invalid JSON \n{raw_text[:500]}")
-        scored= []
+        return []
 
-    return merged   
+    # Drop off-topic noise (low relevance) and papers with incomplete metadata
+    # (no real source link or no authors) so only genuine, citeable papers move on.
+    def is_usable(p):
+        relevant = p.get("relevance", 0) >= MIN_RELEVANCE
+        complete = bool(p.get("url")) and bool(p.get("authors"))
+        return relevant and complete
+
+    kept = [p for p in merged if is_usable(p)]
+    kept.sort(key=lambda p: p.get("total", 0), reverse=True)
+
+    print(f"Filter Agent: kept {len(kept)}/{len(merged)} papers "
+          f"(relevance >= {MIN_RELEVANCE}, complete metadata)")
+    return kept

@@ -21,7 +21,11 @@ from database import (
     get_cached_search, save_to_cache,
     get_user_by_id, get_user_by_username, update_username, update_password, delete_user,
 )
-from auth import hash_password, verify_password, create_token, verify_token
+from auth import (
+    hash_password, verify_password, create_token, verify_token,
+    create_reset_token, verify_reset_token,
+)
+from email_service import send_reset_email
 
 
 logger = logging.getLogger("academic-assistant")
@@ -37,6 +41,11 @@ ALLOWED_ORIGINS = [
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,30}$")
+
+# Base URL used to build password-reset links (points at the deployed frontend).
+APP_BASE_URL = os.getenv(
+    "APP_BASE_URL", "https://academic-assistant-production-35e4.up.railway.app"
+)
 
 
 def _validate_username(v):
@@ -100,12 +109,29 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v):
+        return v.strip().lower()
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 # App
 app = FastAPI()
 
 # Per-IP rate limiting to protect the expensive search pipeline (3 Claude calls
 # per request) from abuse, and to slow down registration/brute-force attempts.
-limiter = Limiter(key_func=get_remote_address)
+# Can be disabled for test runs via RATE_LIMIT_ENABLED=false so a comprehensive
+# suite can register/login freely without tripping the production limits.
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() != "false"
+limiter = Limiter(key_func=get_remote_address, enabled=RATE_LIMIT_ENABLED)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -186,6 +212,34 @@ def login_endpoint(request: Request, payload: LoginRequest):
     }
 
 
+@app.post("/api/forgot-password")
+@limiter.limit("3/hour")
+def forgot_password_endpoint(request: Request, payload: ForgotPasswordRequest):
+    # Always return the same response so we never reveal whether an email is
+    # registered. Only actually send a mail when the user exists.
+    user = get_user_by_email(payload.email)
+    if user:
+        token = create_reset_token(user["id"])
+        reset_link = f"{APP_BASE_URL}/reset?token={token}"
+        try:
+            send_reset_email(user["email"], reset_link)
+        except Exception as e:
+            logger.exception("Failed to send reset email to %s: %s", payload.email, e)
+
+    return {"message": "If that email is registered, a reset link has been sent."}
+
+
+@app.post("/api/reset-password")
+@limiter.limit("5/hour")
+def reset_password_endpoint(request: Request, payload: ResetPasswordRequest):
+    user_id = verify_reset_token(payload.token)
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+    update_password(user_id, hash_password(payload.new_password))
+    return {"message": "Password updated. You can now sign in."}
+
+
 @app.get("/api/me")
 def get_me(user_id: int = Depends(get_current_user)):
     user = get_user_by_id(user_id)
@@ -226,15 +280,16 @@ def delete_me(user_id: int = Depends(get_current_user)):
 @limiter.limit("20/hour")
 def search_endpoint(request: Request, payload: SearchRequest, user_id: int = Depends(get_current_user)):
     try:
-        topic = preprocess_query(payload.topic)
-        cache_key = topic.strip().lower()
+        # Cache on the raw user input so identical searches hit the cache without
+        # paying for query normalization; normalize only on a cache miss.
+        cache_key = payload.topic.strip().lower()
 
-        # Reuse a recent cached result for this topic to skip the expensive pipeline.
         cached = get_cached_search(cache_key)
         if cached:
             synthesis = json.loads(cached["synthesis"])
             paper_count = cached["paper_count"]
         else:
+            topic = preprocess_query(payload.topic)
             papers = search_papers(topic)
             scored = run_filter_agent(papers, topic)
             enriched = run_evidence_agent(scored, topic)
@@ -287,4 +342,11 @@ if os.path.isdir(FRONTEND_DIST):
         # Guard against path traversal: only serve files that live inside dist.
         if full_path and candidate.startswith(dist_root + os.sep) and os.path.isfile(candidate):
             return FileResponse(candidate)
-        return FileResponse(f"{FRONTEND_DIST}/index.html")
+        # index.html must never be cached: it points to hash-named JS/CSS bundles,
+        # so a stale cached index.html keeps loading an old bundle after a deploy
+        # (which is how users end up on outdated frontend code). The hashed assets
+        # themselves are immutable and safe for the browser to cache.
+        return FileResponse(
+            f"{FRONTEND_DIST}/index.html",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
