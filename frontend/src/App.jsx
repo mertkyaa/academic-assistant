@@ -120,17 +120,6 @@ function App() {
     } catch {}
   }, [])
 
-  // Show auth modal after 3 seconds if not logged in
-  useEffect(() => {
-    if (token) return
-
-    const timer = setTimeout(() => {
-      setShowAuthModal(true)
-    }, 3000)
-
-    return () => clearTimeout(timer)
-  }, [token])
-
   // Save to recent searches
   function addToRecent(query) {
     const updated = [query, ...recentSearches.filter((s) => s !== query)]
@@ -383,12 +372,6 @@ function App() {
     const query = (searchTopic || topic).trim()
     if (query.length < 5) return
 
-    // Token yoksa modal aç
-    if (!token) {
-      setShowAuthModal(true)
-      return
-    }
-
     setLoading(true)
     setSynthesis(null)
     setError("")
@@ -398,16 +381,12 @@ function App() {
     try {
       const response = await fetch(API_URL + "/api/search", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + token
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: query })
       })
 
-      if (response.status === 401) {
-        handleLogout()
-        return
+      if (response.status === 429) {
+        throw new Error("Daily search limit reached. Please try again later.")
       }
 
       if (!response.ok) {

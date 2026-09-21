@@ -17,7 +17,7 @@ from filter_agent import run_filter_agent
 from evidence_agent import run_evidence_agent
 from summary_agent import run_summary_agent
 from database import (
-    init_db, create_user, get_user_by_email, save_search, get_user_history,
+    init_db, create_user, get_user_by_email, get_user_history,
     get_cached_search, save_to_cache,
     get_user_by_id, get_user_by_username, update_username, update_password, delete_user,
 )
@@ -276,9 +276,12 @@ def delete_me(user_id: int = Depends(get_current_user)):
     return {"message": "Account deleted"}
 
 
+# Search is open (no login). The per-IP limit is the cost guard against abuse of
+# the expensive pipeline, so it must count real client IPs — see --proxy-headers
+# in the Procfile, which makes get_remote_address see the true IP behind Railway.
 @app.post("/api/search", response_model=SearchResponse)
-@limiter.limit("20/hour")
-def search_endpoint(request: Request, payload: SearchRequest, user_id: int = Depends(get_current_user)):
+@limiter.limit("10/hour;30/day")
+def search_endpoint(request: Request, payload: SearchRequest):
     try:
         # Cache on the raw user input so identical searches hit the cache without
         # paying for query normalization; normalize only on a cache miss.
@@ -296,9 +299,6 @@ def search_endpoint(request: Request, payload: SearchRequest, user_id: int = Dep
             synthesis = run_summary_agent(enriched, topic)
             paper_count = len(scored)
             save_to_cache(cache_key, json.dumps(synthesis), paper_count)
-
-        # Always record the user's own search in their history (original input).
-        save_search(user_id, payload.topic, json.dumps(synthesis), paper_count)
 
         return SearchResponse(
             topic=payload.topic,
