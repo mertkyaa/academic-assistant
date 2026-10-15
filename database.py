@@ -14,38 +14,15 @@ def get_connection():
 
 
 def init_db():
+    """Create the only table the app still needs.
+
+    Accounts were removed — search is open and rate-limited per IP — so there is
+    no users or search_history table here any more. Existing deployments keep
+    those tables untouched (nothing reads or writes them); drop them by hand if
+    and when you want the space back.
+    """
     conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-
-    # Migration: add the username column to any pre-existing users table.
-    # Legacy rows keep NULL username; case-insensitive uniqueness is enforced
-    # via an index (NULLs are treated as distinct, so old rows don't collide).
-    cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT")
-    cursor.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx "
-        "ON users (LOWER(username))"
-    )
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS search_history (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            topic TEXT NOT NULL,
-            synthesis TEXT,
-            paper_count INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT NOW(),
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    """)
 
     # Shared, cross-user cache keyed by the normalized (preprocessed, lowercased) topic.
     # Lets us skip the expensive pipeline (3 Claude calls) when the same topic was
@@ -63,112 +40,6 @@ def init_db():
     conn.commit()
     conn.close()
     print("Database initialized successfully")
-
-
-def create_user(email, password_hash, username=None):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO users (email, password_hash, username) VALUES (%s, %s, %s)",
-            (email, password_hash, username)
-        )
-        conn.commit()
-        cursor.execute(
-            "SELECT * FROM users WHERE email = %s", (email,)
-        )
-        user = cursor.fetchone()
-        return dict(user)
-    finally:
-        conn.close()
-
-
-def get_user_by_email(email):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM users WHERE email = %s", (email,)
-        )
-        user = cursor.fetchone()
-        return dict(user) if user else None
-    finally:
-        conn.close()
-
-
-def get_user_by_id(user_id):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-        user = cursor.fetchone()
-        return dict(user) if user else None
-    finally:
-        conn.close()
-
-
-def get_user_by_username(username):
-    """Case-insensitive lookup so usernames are unique regardless of casing."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM users WHERE LOWER(username) = LOWER(%s)", (username,)
-        )
-        user = cursor.fetchone()
-        return dict(user) if user else None
-    finally:
-        conn.close()
-
-
-def update_username(user_id, username):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET username = %s WHERE id = %s", (username, user_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def update_password(user_id, password_hash):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET password_hash = %s WHERE id = %s",
-            (password_hash, user_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def delete_user(user_id):
-    """Delete a user and their search history (history has a FK to users)."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM search_history WHERE user_id = %s", (user_id,))
-        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def save_search(user_id, topic, synthesis, paper_count):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO search_history (user_id, topic, synthesis, paper_count) VALUES (%s, %s, %s, %s)",
-            (user_id, topic, synthesis, paper_count)
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def get_cached_search(topic, max_age_days=7):
@@ -209,20 +80,6 @@ def save_to_cache(topic, synthesis, paper_count):
             (topic, synthesis, paper_count)
         )
         conn.commit()
-    finally:
-        conn.close()
-
-
-def get_user_history(user_id):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM search_history WHERE user_id = %s ORDER BY created_at DESC",
-            (user_id,)
-        )
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
     finally:
         conn.close()
 

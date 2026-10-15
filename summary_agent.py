@@ -86,16 +86,19 @@ def run_summary_agent(scored_papers, topic):
     lines = []
     for paper in scored_papers:
         evidence = paper.get("evidence", {})
+        # Every field is read defensively: the scores come from the filter
+        # agent's JSON, so a single missing key would otherwise raise KeyError
+        # here and turn the whole request into a 500.
         lines.append(
-            f"paper_id: {paper['paper_id']}\n"
-            f"Title: {paper['title']}\n"
+            f"paper_id: {paper.get('paper_id', 'unknown')}\n"
+            f"Title: {paper.get('title', 'Unknown title')}\n"
             f"Authors: {', '.join(paper.get('authors', [])[:3])}\n"
             f"Published: {paper.get('published', 'N/A')}\n"
             f"Citation Count: {paper.get('citation_count', 'N/A')}\n"
-            f"Score: {paper['total']}/30 "
-            f"(relevance={paper['relevance']}, "
-            f"recency={paper['recency']}, "
-            f"impact={paper['impact']})\n"
+            f"Score: {paper.get('total', 'N/A')}/30 "
+            f"(relevance={paper.get('relevance', 'N/A')}, "
+            f"recency={paper.get('recency', 'N/A')}, "
+            f"impact={paper.get('impact', 'N/A')})\n"
             f"Problem: {evidence.get('problem', 'N/A')}\n"
             f"Method: {evidence.get('method', 'N/A')}\n"
             f"Main Finding: {evidence.get('main_finding', 'N/A')}\n"
@@ -138,7 +141,9 @@ def run_summary_agent(scored_papers, topic):
     # Resolve paper_ids to original metadata
     id_to_paper = {}
     for paper in scored_papers:
-        id_to_paper[paper["paper_id"]] = paper
+        paper_id = paper.get("paper_id")
+        if paper_id:
+            id_to_paper[paper_id] = paper
 
     synthesis["papers"] = id_to_paper
 

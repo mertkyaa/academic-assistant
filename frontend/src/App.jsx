@@ -27,13 +27,19 @@ const TOPICS = [
 ]
 
 const RECENT_KEY = "academic-assistant-recent"
-const TOKEN_KEY = "academic-assistant-token"
-const EMAIL_KEY = "academic-assistant-email"
-const USERNAME_KEY = "academic-assistant-username"
 const MAX_RECENT = 5
 
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
-const USERNAME_RE = /^[a-zA-Z0-9_-]{3,30}$/
+// Keys written by the old account system. Nothing reads them any more, so clear
+// them once on load instead of leaving a stale token sitting in the browser.
+const LEGACY_KEYS = [
+  "academic-assistant-token",
+  "academic-assistant-email",
+  "academic-assistant-username",
+]
+
+// Minimum topic length. Mirrors MIN_TOPIC_LEN in main.py so the button disables
+// before the server would reject the request.
+const MIN_TOPIC_LEN = 5
 
 // Turn an API error response into a readable message. FastAPI validation (422)
 // returns `detail` as an array of {loc, msg, ...} objects, not a string — so a
@@ -68,50 +74,10 @@ function App() {
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const [recentSearches, setRecentSearches] = useState([])
 
-  // Auth state
-  const [token, setToken] = useState(null)
-  const [userEmail, setUserEmail] = useState("")
-  const [userName, setUserName] = useState("")
-  const [authEmail, setAuthEmail] = useState("")
-  const [authPassword, setAuthPassword] = useState("")
-  const [authUsername, setAuthUsername] = useState("")
-  const [authMode, setAuthMode] = useState("login")
-  const [authLoading, setAuthLoading] = useState(false)
-  const [authError, setAuthError] = useState("")
-  const [showAuthModal, setShowAuthModal] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [authInfo, setAuthInfo] = useState("")   // green info message (e.g. reset link sent)
-
-  // Reset-password page state (/reset?token=...)
-  const [resetPw, setResetPw] = useState("")
-  const [resetMsg, setResetMsg] = useState("")
-  const [resetErr, setResetErr] = useState(false)
-  const [resetBusy, setResetBusy] = useState(false)
-  const [resetDone, setResetDone] = useState(false)
-
-  // Profile modal state
-  const [showProfileModal, setShowProfileModal] = useState(false)
-  const [profileUsername, setProfileUsername] = useState("")
-  const [profileMsg, setProfileMsg] = useState("")      // status text
-  const [profileErr, setProfileErr] = useState(false)   // is profileMsg an error?
-  const [pwCurrent, setPwCurrent] = useState("")
-  const [pwNew, setPwNew] = useState("")
-  const [pwMsg, setPwMsg] = useState("")
-  const [pwErr, setPwErr] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [profileBusy, setProfileBusy] = useState(false)
-
-  // Load token and recent searches on mount
+  // Load recent searches on mount, and drop any leftover account keys.
   useEffect(() => {
     try {
-      const savedToken = localStorage.getItem(TOKEN_KEY)
-      const savedEmail = localStorage.getItem(EMAIL_KEY)
-      const savedUsername = localStorage.getItem(USERNAME_KEY)
-      if (savedToken) {
-        setToken(savedToken)
-        setUserEmail(savedEmail || "")
-        setUserName(savedUsername || "")
-      }
+      LEGACY_KEYS.forEach((k) => localStorage.removeItem(k))
     } catch {}
 
     try {
@@ -125,218 +91,9 @@ function App() {
     const updated = [query, ...recentSearches.filter((s) => s !== query)]
       .slice(0, MAX_RECENT)
     setRecentSearches(updated)
-    localStorage.setItem(RECENT_KEY, JSON.stringify(updated))
-  }
-
-  // Auth handlers
-  async function handleAuth() {
-    setAuthError("")
-    const email = authEmail.trim()
-    const username = authUsername.trim()
-
-    // Client-side validation for instant, friendly feedback.
-    if (!EMAIL_RE.test(email)) {
-      setAuthError("Please enter a valid email address.")
-      return
-    }
-    if (authMode === "register") {
-      if (!USERNAME_RE.test(username)) {
-        setAuthError("Username must be 3-30 characters: letters, numbers, _ or -")
-        return
-      }
-      if (authPassword.length < 8) {
-        setAuthError("Password must be at least 8 characters.")
-        return
-      }
-    } else if (!authPassword) {
-      setAuthError("Please enter your password.")
-      return
-    }
-
-    setAuthLoading(true)
-
-    const url = authMode === "login"
-      ? API_URL + "/api/login"
-      : API_URL + "/api/register"
-    const body = authMode === "login"
-      ? { email, password: authPassword }
-      : { email, password: authPassword, username }
-
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(apiErrorMessage(data, "Authentication failed"))
-      }
-
-      setToken(data.token)
-      setUserEmail(data.email)
-      setUserName(data.username || "")
-      localStorage.setItem(TOKEN_KEY, data.token)
-      localStorage.setItem(EMAIL_KEY, data.email)
-      localStorage.setItem(USERNAME_KEY, data.username || "")
-      setShowAuthModal(false)
-      setAuthPassword("")
-      setAuthUsername("")
-    } catch (err) {
-      setAuthError(err.message)
-    } finally {
-      setAuthLoading(false)
-    }
-  }
-
-  async function handleForgot() {
-    setAuthError(""); setAuthInfo("")
-    const email = authEmail.trim()
-    if (!EMAIL_RE.test(email)) {
-      setAuthError("Please enter a valid email address.")
-      return
-    }
-    setAuthLoading(true)
-    try {
-      const res = await fetch(API_URL + "/api/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
-      })
-      const data = await res.json()
-      // Always a generic message (server never reveals whether the email exists).
-      setAuthInfo(data.message || "If that email is registered, a reset link has been sent.")
-    } catch {
-      setAuthError("Something went wrong. Please try again.")
-    } finally {
-      setAuthLoading(false)
-    }
-  }
-
-  async function handleReset() {
-    setResetMsg(""); setResetErr(false)
-    if (resetPw.length < 8) {
-      setResetErr(true); setResetMsg("Password must be at least 8 characters.")
-      return
-    }
-    setResetBusy(true)
-    try {
-      const res = await fetch(API_URL + "/api/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: resetToken, new_password: resetPw })
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(apiErrorMessage(data, "Could not reset password"))
-      setResetDone(true); setResetErr(false)
-      setResetMsg(data.message || "Password updated. You can now sign in.")
-    } catch (err) {
-      setResetErr(true); setResetMsg(err.message)
-    } finally {
-      setResetBusy(false)
-    }
-  }
-
-  function handleLogout() {
-    setToken(null)
-    setUserEmail("")
-    setUserName("")
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(EMAIL_KEY)
-    localStorage.removeItem(USERNAME_KEY)
-    setSynthesis(null)
-    setAuthEmail("")
-    setAuthPassword("")
-    setAuthError("")
-    setAuthMode("login")
-    setShowProfileModal(false)
-    setShowAuthModal(true)
-  }
-
-  // --- Profile handlers ---
-
-  function openProfile() {
-    setProfileUsername(userName || "")
-    setProfileMsg(""); setProfileErr(false)
-    setPwCurrent(""); setPwNew(""); setPwMsg(""); setPwErr(false)
-    setConfirmDelete(false)
-    setShowProfileModal(true)
-  }
-
-  async function saveUsername() {
-    const username = profileUsername.trim()
-    setProfileMsg(""); setProfileErr(false)
-    if (!USERNAME_RE.test(username)) {
-      setProfileErr(true)
-      setProfileMsg("Username must be 3-30 characters: letters, numbers, _ or -")
-      return
-    }
-    setProfileBusy(true)
-    try {
-      const res = await fetch(API_URL + "/api/me", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-        body: JSON.stringify({ username })
-      })
-      if (res.status === 401) { handleLogout(); return }
-      const data = await res.json()
-      if (!res.ok) throw new Error(apiErrorMessage(data, "Could not update username"))
-      setUserName(data.username || "")
-      localStorage.setItem(USERNAME_KEY, data.username || "")
-      setProfileErr(false)
-      setProfileMsg("Username updated.")
-    } catch (err) {
-      setProfileErr(true); setProfileMsg(err.message)
-    } finally {
-      setProfileBusy(false)
-    }
-  }
-
-  async function changePassword() {
-    setPwMsg(""); setPwErr(false)
-    if (pwNew.length < 8) {
-      setPwErr(true); setPwMsg("New password must be at least 8 characters.")
-      return
-    }
-    setProfileBusy(true)
-    try {
-      const res = await fetch(API_URL + "/api/me/password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-        body: JSON.stringify({ current_password: pwCurrent, new_password: pwNew })
-      })
-      if (res.status === 401) { handleLogout(); return }
-      const data = await res.json()
-      if (!res.ok) throw new Error(apiErrorMessage(data, "Could not change password"))
-      setPwErr(false); setPwMsg("Password changed.")
-      setPwCurrent(""); setPwNew("")
-    } catch (err) {
-      setPwErr(true); setPwMsg(err.message)
-    } finally {
-      setProfileBusy(false)
-    }
-  }
-
-  async function deleteAccount() {
-    setProfileBusy(true)
-    try {
-      const res = await fetch(API_URL + "/api/me", {
-        method: "DELETE",
-        headers: { "Authorization": "Bearer " + token }
-      })
-      if (res.status === 401) { handleLogout(); return }
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(apiErrorMessage(data, "Could not delete account"))
-      }
-      // Account gone — clear everything and return to the auth screen.
-      handleLogout()
-    } catch (err) {
-      setProfileErr(true); setProfileMsg(err.message)
-      setProfileBusy(false)
-    }
+      localStorage.setItem(RECENT_KEY, JSON.stringify(updated))
+    } catch {}
   }
 
   // Filtered autocomplete suggestions
@@ -370,7 +127,7 @@ function App() {
 
   async function handleSearch(searchTopic) {
     const query = (searchTopic || topic).trim()
-    if (query.length < 5) return
+    if (query.length < MIN_TOPIC_LEN) return
 
     setLoading(true)
     setSynthesis(null)
@@ -386,11 +143,16 @@ function App() {
       })
 
       if (response.status === 429) {
-        throw new Error("Daily search limit reached. Please try again later.")
+        throw new Error("Search limit reached for now. Please try again later.")
       }
 
       if (!response.ok) {
-        throw new Error("Server error: " + response.status)
+        // 404 (nothing relevant found), 503 (summary failed) and 422 (bad topic)
+        // all carry a message worth showing instead of a bare status code.
+        const data = await response.json().catch(() => ({}))
+        throw new Error(
+          apiErrorMessage(data, "Server error: " + response.status)
+        )
       }
 
       const data = await response.json()
@@ -590,366 +352,12 @@ function App() {
     ? Object.keys(synthesis.papers).length
     : 0
 
-  // Password-reset page: shown when the user opens the emailed /reset?token=... link.
-  const isResetPage = typeof window !== "undefined" && window.location.pathname === "/reset"
-  const resetToken = isResetPage
-    ? new URLSearchParams(window.location.search).get("token")
-    : null
-
-  if (isResetPage) {
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
-        <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-sm">
-          <h1 className="text-xl font-bold text-gray-800 text-center mb-1 font-heading">
-            Reset Password
-          </h1>
-          {!resetToken ? (
-            <p className="text-sm text-red-600 text-center mt-3">
-              This reset link is invalid or incomplete.
-            </p>
-          ) : resetDone ? (
-            <div className="text-center mt-4">
-              <p className="text-sm text-green-600 mb-4">{resetMsg}</p>
-              <a href="/" className="inline-block bg-blue-600 text-white px-4 py-2
-                                     rounded-lg text-sm font-medium hover:bg-blue-700">
-                Go to sign in
-              </a>
-            </div>
-          ) : (
-            <>
-              <p className="text-gray-500 text-sm text-center mb-5">
-                Choose a new password for your account.
-              </p>
-              {resetMsg && (
-                <p className={`text-xs text-center mb-3 ${resetErr ? "text-red-600" : "text-green-600"}`}>
-                  {resetMsg}
-                </p>
-              )}
-              <div className="relative mb-4">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={resetPw}
-                  onChange={(e) => setResetPw(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleReset() }}
-                  placeholder="New password (min 8 chars)"
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2.5
-                             pr-16 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs
-                             text-gray-500 hover:text-gray-700 px-2 py-1"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? "Hide" : "Show"}
-                </button>
-              </div>
-              <button
-                onClick={handleReset}
-                disabled={resetBusy}
-                className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-medium
-                           hover:bg-blue-700 disabled:bg-blue-400 text-sm"
-              >
-                {resetBusy ? "Please wait..." : "Set new password"}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="min-h-screen bg-gray-100">
 
-      {/* AUTH MODAL */}
-      {showAuthModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
-          <div className="relative bg-white rounded-xl shadow-2xl p-8 w-full
-                          max-w-sm mx-4">
-            <h2 className="text-xl font-bold text-gray-800 text-center mb-1
-                           font-heading">
-              {authMode === "login" ? "Welcome Back"
-                : authMode === "register" ? "Create Account"
-                : "Reset Password"}
-            </h2>
-            <p className="text-gray-500 text-sm text-center mb-5">
-              {authMode === "forgot"
-                ? "Enter your email and we'll send a reset link."
-                : "Sign in to search and save your history"}
-            </p>
-
-            {authError && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3
-                              mb-4 text-red-700 text-sm text-center">
-                {authError}
-              </div>
-            )}
-            {authInfo && (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-3
-                              mb-4 text-green-700 text-sm text-center">
-                {authInfo}
-              </div>
-            )}
-
-            {authMode === "register" && (
-              <input
-                type="text"
-                value={authUsername}
-                onChange={(e) => setAuthUsername(e.target.value)}
-                placeholder="Username"
-                className="w-full border border-gray-300 rounded-lg px-4 py-2.5
-                           mb-3 focus:outline-none focus:ring-2
-                           focus:ring-blue-500 text-sm"
-              />
-            )}
-            <input
-              type="email"
-              value={authEmail}
-              onChange={(e) => setAuthEmail(e.target.value)}
-              placeholder="Email"
-              className="w-full border border-gray-300 rounded-lg px-4 py-2.5
-                         mb-3 focus:outline-none focus:ring-2
-                         focus:ring-blue-500 text-sm"
-            />
-            {authMode !== "forgot" && (
-              <div className="relative mb-4">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleAuth() }}
-                  placeholder="Password"
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2.5
-                             pr-16 focus:outline-none focus:ring-2
-                             focus:ring-blue-500 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs
-                             text-gray-500 hover:text-gray-700 px-2 py-1"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? "Hide" : "Show"}
-                </button>
-              </div>
-            )}
-
-            {authMode === "login" && (
-              <div className="text-right -mt-2 mb-4">
-                <button
-                  onClick={() => { setAuthMode("forgot"); setAuthError(""); setAuthInfo("") }}
-                  className="text-xs text-blue-600 hover:underline"
-                >
-                  Forgot password?
-                </button>
-              </div>
-            )}
-
-            <button
-              onClick={authMode === "forgot" ? handleForgot : handleAuth}
-              disabled={authLoading}
-              className="w-full bg-blue-600 text-white py-2.5 rounded-lg
-                         font-medium hover:bg-blue-700 disabled:bg-blue-400
-                         disabled:cursor-not-allowed text-sm"
-            >
-              {authLoading
-                ? "Please wait..."
-                : authMode === "login" ? "Sign In"
-                : authMode === "register" ? "Create Account"
-                : "Send reset link"
-              }
-            </button>
-
-            <p className="text-center text-xs text-gray-500 mt-4">
-              {authMode === "forgot" ? (
-                <button
-                  onClick={() => { setAuthMode("login"); setAuthError(""); setAuthInfo("") }}
-                  className="text-blue-600 hover:underline font-medium"
-                >
-                  Back to sign in
-                </button>
-              ) : (
-                <>
-                  {authMode === "login"
-                    ? "Don't have an account? "
-                    : "Already have an account? "}
-                  <button
-                    onClick={() => {
-                      setAuthMode(authMode === "login" ? "register" : "login")
-                      setAuthError(""); setAuthInfo("")
-                    }}
-                    className="text-blue-600 hover:underline font-medium"
-                  >
-                    {authMode === "login" ? "Sign Up" : "Sign In"}
-                  </button>
-                </>
-              )}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* PROFILE MODAL */}
-      {showProfileModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={() => setShowProfileModal(false)}
-          ></div>
-          <div className="relative bg-white rounded-xl shadow-2xl p-6 w-full
-                          max-w-md mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-800 font-heading">Profile</h2>
-              <button
-                onClick={() => setShowProfileModal(false)}
-                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Email (read-only) */}
-            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">
-              Email
-            </label>
-            <div className="w-full border border-gray-200 bg-gray-50 rounded-lg
-                            px-4 py-2.5 mb-5 text-sm text-gray-600">
-              {userEmail || "—"}
-            </div>
-
-            {/* Username */}
-            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">
-              Username
-            </label>
-            <div className="flex gap-2 mb-1">
-              <input
-                type="text"
-                value={profileUsername}
-                onChange={(e) => setProfileUsername(e.target.value)}
-                placeholder="Username"
-                className="flex-1 border border-gray-300 rounded-lg px-4 py-2.5
-                           focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-              />
-              <button
-                onClick={saveUsername}
-                disabled={profileBusy}
-                className="bg-blue-600 text-white px-4 rounded-lg text-sm font-medium
-                           hover:bg-blue-700 disabled:bg-blue-400"
-              >
-                Save
-              </button>
-            </div>
-            {profileMsg && (
-              <p className={`text-xs mb-4 ${profileErr ? "text-red-600" : "text-green-600"}`}>
-                {profileMsg}
-              </p>
-            )}
-
-            <hr className="my-5 border-gray-100" />
-
-            {/* Change password */}
-            <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">
-              Change Password
-            </label>
-            <input
-              type="password"
-              value={pwCurrent}
-              onChange={(e) => setPwCurrent(e.target.value)}
-              placeholder="Current password"
-              className="w-full border border-gray-300 rounded-lg px-4 py-2.5 mb-2
-                         focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            />
-            <input
-              type="password"
-              value={pwNew}
-              onChange={(e) => setPwNew(e.target.value)}
-              placeholder="New password (min 8 chars)"
-              className="w-full border border-gray-300 rounded-lg px-4 py-2.5 mb-2
-                         focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            />
-            <button
-              onClick={changePassword}
-              disabled={profileBusy}
-              className="w-full bg-gray-800 text-white py-2.5 rounded-lg text-sm
-                         font-medium hover:bg-gray-900 disabled:bg-gray-400"
-            >
-              Update Password
-            </button>
-            {pwMsg && (
-              <p className={`text-xs mt-2 ${pwErr ? "text-red-600" : "text-green-600"}`}>
-                {pwMsg}
-              </p>
-            )}
-
-            <hr className="my-5 border-gray-100" />
-
-            {/* Delete account */}
-            <label className="block text-xs font-semibold text-red-500 uppercase mb-2">
-              Danger Zone
-            </label>
-            {!confirmDelete ? (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="w-full border border-red-300 text-red-600 py-2.5 rounded-lg
-                           text-sm font-medium hover:bg-red-50"
-              >
-                Delete Account
-              </button>
-            ) : (
-              <div className="border border-red-200 bg-red-50 rounded-lg p-3">
-                <p className="text-sm text-red-700 mb-3">
-                  This permanently deletes your account and search history. This cannot be undone.
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={deleteAccount}
-                    disabled={profileBusy}
-                    className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm
-                               font-medium hover:bg-red-700 disabled:bg-red-400"
-                  >
-                    Yes, delete
-                  </button>
-                  <button
-                    onClick={() => setConfirmDelete(false)}
-                    disabled={profileBusy}
-                    className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg
-                               text-sm font-medium hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* HEADER */}
       <div className="bg-gradient-to-r from-blue-700 to-indigo-800
-                      text-white py-10 px-4 text-center relative">
-        {token && (
-          <div className="absolute top-4 right-4 flex items-center gap-3">
-            <span className="text-blue-200 text-sm">{userName || userEmail}</span>
-            <button
-              onClick={openProfile}
-              className="text-sm bg-white/20 hover:bg-white/30 px-3 py-1
-                         rounded-lg transition-colors"
-            >
-              Profile
-            </button>
-            <button
-              onClick={handleLogout}
-              className="text-sm bg-white/20 hover:bg-white/30 px-3 py-1
-                         rounded-lg transition-colors"
-            >
-              Logout
-            </button>
-          </div>
-        )}
+                      text-white py-10 px-4 text-center">
         <h1 className="text-4xl font-bold tracking-tight font-heading">
           Academic Paper Assistant
         </h1>
@@ -978,7 +386,7 @@ function App() {
           />
           <button
             onClick={() => handleSearch()}
-            disabled={loading || topic.trim().length < 5}
+            disabled={loading || topic.trim().length < MIN_TOPIC_LEN}
             className="bg-blue-600 text-white px-6 py-3 rounded-lg text-lg
                        font-medium hover:bg-blue-700
                        disabled:bg-blue-400 disabled:cursor-not-allowed
@@ -1026,9 +434,9 @@ function App() {
           )}
         </div>
 
-        {topic.length > 0 && topic.trim().length < 5 && (
+        {topic.length > 0 && topic.trim().length < MIN_TOPIC_LEN && (
           <p className="mt-1 text-xs text-gray-400">
-            Enter at least 5 characters to search
+            Enter at least {MIN_TOPIC_LEN} characters to search
           </p>
         )}
 

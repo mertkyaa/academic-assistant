@@ -1,12 +1,11 @@
 import json
 import os
-import re
 import logging
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -16,16 +15,7 @@ from paper_search import search_papers
 from filter_agent import run_filter_agent
 from evidence_agent import run_evidence_agent
 from summary_agent import run_summary_agent
-from database import (
-    init_db, create_user, get_user_by_email, get_user_history,
-    get_cached_search, save_to_cache,
-    get_user_by_id, get_user_by_username, update_username, update_password, delete_user,
-)
-from auth import (
-    hash_password, verify_password, create_token, verify_token,
-    create_reset_token, verify_reset_token,
-)
-from email_service import send_reset_email
+from database import init_db, get_cached_search, save_to_cache
 
 
 logger = logging.getLogger("academic-assistant")
@@ -39,25 +29,30 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,30}$")
-
-# Base URL used to build password-reset links (points at the deployed frontend).
-APP_BASE_URL = os.getenv(
-    "APP_BASE_URL", "https://academic-assistant-production-35e4.up.railway.app"
-)
-
-
-def _validate_username(v):
-    v = v.strip()
-    if not USERNAME_RE.match(v):
-        raise ValueError("Username must be 3-30 characters: letters, numbers, _ or -")
-    return v
+# Topic bounds. The minimum mirrors the frontend's own check so a direct API
+# call can't burn a Claude pipeline run (and a rate-limit slot) on "a" or "".
+# The maximum keeps a pathological payload out of the model's context.
+MIN_TOPIC_LEN = 5
+MAX_TOPIC_LEN = 200
 
 
 # Pydantic models
 class SearchRequest(BaseModel):
     topic: str
+
+    @field_validator("topic")
+    @classmethod
+    def valid_topic(cls, v):
+        v = v.strip()
+        if len(v) < MIN_TOPIC_LEN:
+            raise ValueError(
+                f"Topic must be at least {MIN_TOPIC_LEN} characters"
+            )
+        if len(v) > MAX_TOPIC_LEN:
+            raise ValueError(
+                f"Topic must be at most {MAX_TOPIC_LEN} characters"
+            )
+        return v
 
 
 class SearchResponse(BaseModel):
@@ -66,70 +61,12 @@ class SearchResponse(BaseModel):
     paper_count: int
 
 
-class RegisterRequest(BaseModel):
-    email: str
-    password: str = Field(min_length=8, max_length=128)
-    username: str
-
-    @field_validator("email")
-    @classmethod
-    def valid_email(cls, v):
-        v = v.strip().lower()
-        if not EMAIL_RE.match(v):
-            raise ValueError("Invalid email format")
-        return v
-
-    @field_validator("username")
-    @classmethod
-    def valid_username(cls, v):
-        return _validate_username(v)
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-    @field_validator("email")
-    @classmethod
-    def normalize_email(cls, v):
-        return v.strip().lower()
-
-
-class UpdateProfileRequest(BaseModel):
-    username: str
-
-    @field_validator("username")
-    @classmethod
-    def valid_username(cls, v):
-        return _validate_username(v)
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=8, max_length=128)
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: str
-
-    @field_validator("email")
-    @classmethod
-    def normalize_email(cls, v):
-        return v.strip().lower()
-
-
-class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str = Field(min_length=8, max_length=128)
-
-
 # App
 app = FastAPI()
 
-# Per-IP rate limiting to protect the expensive search pipeline (3 Claude calls
-# per request) from abuse, and to slow down registration/brute-force attempts.
-# Can be disabled for test runs via RATE_LIMIT_ENABLED=false so a comprehensive
-# suite can register/login freely without tripping the production limits.
+# Per-IP rate limiting is the only access control: search is open to everyone,
+# so this is what protects the expensive pipeline (3 Claude calls per request)
+# from abuse. Can be disabled for test runs via RATE_LIMIT_ENABLED=false.
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() != "false"
 limiter = Limiter(key_func=get_remote_address, enabled=RATE_LIMIT_ENABLED)
 app.state.limiter = limiter
@@ -145,178 +82,92 @@ app.add_middleware(
 init_db()
 
 
-def get_current_user(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
-
-    token = authorization.split(" ")[1]
-    user_id = verify_token(token)
-
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    return user_id
-
-
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "Academic Assistant API is running"}
 
 
-def _public_user(user):
-    """User fields safe to send to the client (never the password hash)."""
-    return {
-        "id": user["id"],
-        "email": user["email"],
-        "username": user.get("username"),
-        "created_at": user["created_at"],
-    }
-
-
-@app.post("/api/register")
-@limiter.limit("5/hour")
-def register_endpoint(request: Request, payload: RegisterRequest):
-    if get_user_by_email(payload.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    if get_user_by_username(payload.username):
-        raise HTTPException(status_code=400, detail="Username already taken")
-
-    hashed = hash_password(payload.password)
-    user = create_user(payload.email, hashed, payload.username)
-    token = create_token(user["id"])
-
-    return {
-        "message": "Registration successful",
-        "token": token,
-        "email": user["email"],
-        "username": user["username"],
-    }
-
-
-@app.post("/api/login")
-@limiter.limit("10/minute")
-def login_endpoint(request: Request, payload: LoginRequest):
-    user = get_user_by_email(payload.email)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    if not verify_password(payload.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    token = create_token(user["id"])
-    return {
-        "message": "Login successful",
-        "token": token,
-        "email": user["email"],
-        "username": user.get("username"),
-    }
-
-
-@app.post("/api/forgot-password")
-@limiter.limit("3/hour")
-def forgot_password_endpoint(request: Request, payload: ForgotPasswordRequest):
-    # Always return the same response so we never reveal whether an email is
-    # registered. Only actually send a mail when the user exists.
-    user = get_user_by_email(payload.email)
-    if user:
-        token = create_reset_token(user["id"])
-        reset_link = f"{APP_BASE_URL}/reset?token={token}"
-        try:
-            send_reset_email(user["email"], reset_link)
-        except Exception as e:
-            logger.exception("Failed to send reset email to %s: %s", payload.email, e)
-
-    return {"message": "If that email is registered, a reset link has been sent."}
-
-
-@app.post("/api/reset-password")
-@limiter.limit("5/hour")
-def reset_password_endpoint(request: Request, payload: ResetPasswordRequest):
-    user_id = verify_reset_token(payload.token)
-    if user_id is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
-
-    update_password(user_id, hash_password(payload.new_password))
-    return {"message": "Password updated. You can now sign in."}
-
-
-@app.get("/api/me")
-def get_me(user_id: int = Depends(get_current_user)):
-    user = get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return _public_user(user)
-
-
-@app.patch("/api/me")
-def update_me(payload: UpdateProfileRequest, user_id: int = Depends(get_current_user)):
-    existing = get_user_by_username(payload.username)
-    if existing and existing["id"] != user_id:
-        raise HTTPException(status_code=400, detail="Username already taken")
-
-    update_username(user_id, payload.username)
-    return _public_user(get_user_by_id(user_id))
-
-
-@app.post("/api/me/password")
-@limiter.limit("5/minute")
-def change_password_endpoint(request: Request, payload: ChangePasswordRequest,
-                             user_id: int = Depends(get_current_user)):
-    user = get_user_by_id(user_id)
-    if not user or not verify_password(payload.current_password, user["password_hash"]):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
-
-    update_password(user_id, hash_password(payload.new_password))
-    return {"message": "Password updated successfully"}
-
-
-@app.delete("/api/me")
-def delete_me(user_id: int = Depends(get_current_user)):
-    delete_user(user_id)
-    return {"message": "Account deleted"}
-
-
-# Search is open (no login). The per-IP limit is the cost guard against abuse of
-# the expensive pipeline, so it must count real client IPs — see --proxy-headers
-# in the Procfile, which makes get_remote_address see the true IP behind Railway.
+# Search is open to everyone — no accounts, no login. The per-IP limit is the
+# cost guard, so it must count real client IPs: see --proxy-headers in the
+# Procfile, which makes get_remote_address see the true IP behind Railway.
 @app.post("/api/search", response_model=SearchResponse)
 @limiter.limit("10/hour;30/day")
 def search_endpoint(request: Request, payload: SearchRequest):
+    # Cache on the raw user input so identical searches hit the cache without
+    # paying for query normalization; normalize only on a cache miss.
+    cache_key = payload.topic.strip().lower()
+
     try:
-        # Cache on the raw user input so identical searches hit the cache without
-        # paying for query normalization; normalize only on a cache miss.
-        cache_key = payload.topic.strip().lower()
-
         cached = get_cached_search(cache_key)
-        if cached:
-            synthesis = json.loads(cached["synthesis"])
-            paper_count = cached["paper_count"]
-        else:
-            topic = preprocess_query(payload.topic)
-            papers = search_papers(topic)
-            scored = run_filter_agent(papers, topic)
-            enriched = run_evidence_agent(scored, topic)
-            synthesis = run_summary_agent(enriched, topic)
-            paper_count = len(scored)
-            save_to_cache(cache_key, json.dumps(synthesis), paper_count)
+    except Exception as e:
+        # A cache read failure must not take the whole search down — just run
+        # the pipeline as if it were a miss.
+        logger.exception("Cache read failed for topic=%r: %s", cache_key, e)
+        cached = None
 
-        return SearchResponse(
-            topic=payload.topic,
-            synthesis=synthesis,
-            paper_count=paper_count,
-        )
+    if cached:
+        synthesis = json.loads(cached["synthesis"])
+        # Only trust a cached entry that is actually a synthesis object. A past
+        # bug stored `null` here when the summary agent returned invalid JSON,
+        # which then made this topic fail for as long as the entry lived. Treat
+        # anything unusable as a miss so the entry heals itself on this run.
+        if isinstance(synthesis, dict) and synthesis:
+            return SearchResponse(
+                topic=payload.topic,
+                synthesis=synthesis,
+                paper_count=cached["paper_count"],
+            )
+        logger.warning("Discarding unusable cache entry for topic=%r", cache_key)
 
+    try:
+        topic = preprocess_query(payload.topic)
+        papers = search_papers(topic)
+        scored = run_filter_agent(papers, topic)
     except Exception as e:
         # Log the real error server-side; return a generic message so we don't
         # leak internal details (stack traces, DB errors) to the client.
         logger.exception("Search failed for topic=%r: %s", payload.topic, e)
         raise HTTPException(status_code=500, detail="Search failed. Please try again.")
 
+    # Nothing relevant survived scoring (off-topic query, or all three paper
+    # sources were down). Tell the user plainly instead of running the two
+    # remaining agents on an empty list and caching a hollow "no papers were
+    # provided" synthesis for a week.
+    if not scored:
+        raise HTTPException(
+            status_code=404,
+            detail="No relevant papers found for this topic. Try different or broader wording.",
+        )
 
-@app.get("/api/history")
-def history_endpoint(user_id: int = Depends(get_current_user)):
-    history = get_user_history(user_id)
-    return {"history": history}
+    try:
+        enriched = run_evidence_agent(scored, topic)
+        synthesis = run_summary_agent(enriched, topic)
+    except Exception as e:
+        logger.exception("Search failed for topic=%r: %s", payload.topic, e)
+        raise HTTPException(status_code=500, detail="Search failed. Please try again.")
+
+    # run_summary_agent returns None when the model's reply wasn't valid JSON.
+    # Surface that as a retryable error and never cache it.
+    if not isinstance(synthesis, dict) or not synthesis:
+        logger.error("Summary agent produced no usable synthesis for topic=%r", payload.topic)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not generate a summary for this topic. Please try again.",
+        )
+
+    paper_count = len(scored)
+
+    try:
+        save_to_cache(cache_key, json.dumps(synthesis), paper_count)
+    except Exception as e:
+        # The result is good even if we failed to cache it — serve it anyway.
+        logger.exception("Cache write failed for topic=%r: %s", cache_key, e)
+
+    return SearchResponse(
+        topic=payload.topic,
+        synthesis=synthesis,
+        paper_count=paper_count,
+    )
 
 
 # --- Serve the built React frontend from this same service (single-service deploy) ---

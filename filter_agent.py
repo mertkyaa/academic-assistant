@@ -104,17 +104,44 @@ def run_filter_agent(papers,topic):
         raw_text = raw_text.strip()
         scored = json.loads(raw_text)
 
-        # Merge scores with original paper metadata
-        title_to_paper = {}
+        # Match scores back to the original papers by paper_id — that is the id
+        # we put in the prompt, so it is authoritative. Fall back to the title
+        # for a reply that echoed the title but dropped the id.
+        by_id = {}
+        by_title = {}
         for paper in papers:
-            key = paper["title"].strip().lower()
-            title_to_paper[key] = paper
+            paper_id = str(paper.get("paper_id", "")).strip()
+            if paper_id:
+                by_id[paper_id] = paper
+            title = (paper.get("title") or "").strip().lower()
+            if title:
+                by_title[title] = paper
 
         for item in scored:
-            key = item.get("title", "").strip().lower()
-            original = title_to_paper.get(key, {})
-            combined = {**original, **item}
-            merged.append(combined)
+            paper_id = str(item.get("paper_id", "")).strip()
+            original = by_id.get(paper_id)
+            if original is None:
+                original = by_title.get((item.get("title") or "").strip().lower())
+            if original is None:
+                # Scores for a paper we never sent. Dropping it beats emitting a
+                # row with no real url or authors behind it.
+                print(f"Filter Agent: ignoring unknown paper (paper_id={paper_id!r})")
+                continue
+
+            # Scores come from the model, but identity and metadata come from the
+            # source APIs — so the original wins on shared keys. Otherwise a
+            # paraphrased title or an invented paper_id would overwrite the real
+            # ones, and the paper would lose the url/authors it needs downstream.
+            merged.append({
+                **item,
+                **original,
+                "relevance": item.get("relevance", 0),
+                "recency": item.get("recency", 0),
+                "impact": item.get("impact", 0),
+                "total": item.get("total", 0),
+                "paper_type": item.get("paper_type", "other"),
+                "reason": item.get("reason", ""),
+            })
 
     except json.JSONDecodeError:
         print(f"Filter agent returned invalid JSON \n{raw_text[:500]}")
