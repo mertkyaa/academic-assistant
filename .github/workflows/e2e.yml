@@ -1,9 +1,9 @@
 name: E2E smoke tests
 
-# Runs the cheap E2E tests (API health + auth-gate render) on every push and PR.
-# The full "register + search" test is intentionally excluded: it hits the live
-# pipeline (~3 Claude API calls = real cost) and writes a user to the prod DB,
-# so it is run manually rather than on every push.
+# Runs the cheap E2E tests (API health + landing page render) on every push and PR.
+# The search test is intentionally excluded: on a cache miss it runs the live
+# pipeline (4 Claude API calls = real cost), so it is run manually rather than
+# on every push.
 
 on:
   push:
