@@ -1,16 +1,98 @@
-# React + Vite
+# Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React single-page UI for the Academic Research Assistant. For project setup,
+the pipeline and the API contract, see the [root README](../README.md); this
+file covers only what is specific to this directory.
 
-Currently, two official plugins are available:
+## Layout
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```
+src/
+├── main.jsx          React entry point
+├── App.jsx           The entire UI: search box, autocomplete, results, exports
+├── exportUtils.js    Markdown builder and print-ready HTML for the PDF export
+└── index.css         Tailwind import + the two custom font families
+e2e/app.spec.js       Playwright tests (run against the live deployment)
+public/               favicon.svg, icons.svg — copied to dist as-is
+dist/                 Production build. Committed on purpose — see below.
+```
 
-## React Compiler
+`App.jsx` is deliberately one file. The UI is a single screen with no routing,
+and the presentational pieces (`PaperCard`, `SourceList`, the skeletons) are
+only used by it, so splitting them across files would add imports without
+adding clarity.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Running
 
-## Expanding the ESLint configuration
+```bash
+npm install
+npm run dev      # http://localhost:5173
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+The API base URL comes from `VITE_API_URL`:
+
+- `.env` → `http://localhost:8000` for local development. Gitignored, so
+  create it yourself after cloning.
+- `.env.production` → the Railway domain. This one **is committed**: it was
+  added before the ignore rule, so the rule in `.gitignore` has no effect on
+  it. That is harmless here because it holds nothing but a public URL.
+
+Never put a secret in a `VITE_`-prefixed variable. Vite inlines them into the
+client bundle at build time, so anything there ships to every visitor in
+plain text. API keys belong in the backend's own `.env`.
+
+Run the backend separately (`uvicorn main:app --reload --port 8000` from the
+project root) or point `VITE_API_URL` at the deployed API to work on the UI
+alone.
+
+## Styling
+
+Tailwind CSS 4 via `@tailwindcss/vite` — configured in `src/index.css`, not in
+a `tailwind.config.js`. Two custom families are declared in the `@theme` block
+and loaded from Google Fonts in `index.html`:
+
+- `font-heading` → Inter, for headings and the title
+- `font-academic` → Merriweather, for body prose
+
+Because Tailwind 4 generates CSS by scanning the source for class names, the
+bundle only contains classes that are actually used. Deleting UI shrinks the
+CSS on the next build.
+
+## Build
+
+```bash
+npm run build    # outputs to dist/
+npm run preview  # serve the build locally
+```
+
+**`dist/` is committed to the repository.** FastAPI serves it directly, so the
+deployed frontend is whatever was last built and committed — not whatever is
+in `src/`. Any change here needs `npm run build` and the rebuilt bundle
+committed, or the deploy silently ships the previous version. The asset
+filenames are content-hashed, so a rebuild usually renames them; stage the
+deletions alongside the additions.
+
+## Tests
+
+```bash
+npx playwright test -g "API health|landing page"   # free
+npx playwright test                                # includes a live paid search
+```
+
+`playwright.config.js` points `baseURL` at the **live Railway deployment**, not
+at localhost. Two consequences worth knowing:
+
+- The full suite's search test runs the real pipeline on a cache miss, which
+  costs Claude API calls. CI runs only the two free tests.
+- A test that asserts on UI text fails between pushing a change and Railway
+  finishing the deploy. Re-run the job once the deploy is live.
+
+## Lint
+
+```bash
+npm run lint
+```
+
+Currently reports pre-existing errors: the presentational components defined
+inside `App.jsx` trip `react-hooks/static-components`, and `exportUtils.js` has
+one unnecessary regex escape. Neither affects the build.
