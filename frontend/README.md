@@ -29,13 +29,17 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
-The API base URL comes from `VITE_API_URL`:
+The API base URL comes from `VITE_API_URL`, and both env files are gitignored:
 
-- `.env` → `http://localhost:8000` for local development. Gitignored, so
-  create it yourself after cloning.
-- `.env.production` → the Railway domain. This one **is committed**: it was
-  added before the ignore rule, so the rule in `.gitignore` has no effect on
-  it. That is harmless here because it holds nothing but a public URL.
+- `.env` → `http://localhost:8000`. Needed for `npm run dev`, because the Vite
+  dev server on `:5173` and the API on `:8000` are different origins.
+- `.env.production` → optional. See `.env.production.example`.
+
+If `VITE_API_URL` is unset the app falls back to **same-origin relative
+requests**, which is what production actually wants: FastAPI serves this
+bundle itself, so `/api/search` resolves against whatever domain the app is
+on. That makes the production build portable across domains and means a fresh
+clone builds correctly without any env file.
 
 Never put a secret in a `VITE_`-prefixed variable. Vite inlines them into the
 client bundle at build time, so anything there ships to every visitor in

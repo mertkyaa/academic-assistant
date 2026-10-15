@@ -1,7 +1,12 @@
 import { useState, useEffect } from "react"
 import { slugify, buildMarkdown, buildPaperHtml } from "./exportUtils"
 
-const API_URL = import.meta.env.VITE_API_URL
+// Falls back to same-origin relative requests ("" + "/api/search" = "/api/search"),
+// which is exactly right in production: FastAPI serves this bundle itself, so the
+// API lives on the same origin. VITE_API_URL is only needed when the frontend runs
+// somewhere else — the Vite dev server on :5173 talking to the API on :8000.
+// Without the fallback, a clone missing .env.production builds to "undefined/api/search".
+const API_URL = import.meta.env.VITE_API_URL ?? ""
 
 const TOPICS = [
   "machine learning",

@@ -1,5 +1,12 @@
-@import "tailwindcss";
+/* source(none) disables Tailwind 4's automatic content detection, which scans
+   every non-ignored file in the project — Markdown included. The README prose
+   was being read as class-name candidates and added ~12 KB of dead CSS to the
+   bundle. Scanning only the files that can actually contain classes keeps the
+   output honest; add a new @source line if components move outside src/. */
+@import "tailwindcss" source(none);
 @plugin "@tailwindcss/typography";
+
+@source "./**/*.{js,jsx}";
 
 @theme {
   --font-academic: "Merriweather", Georgia, serif;

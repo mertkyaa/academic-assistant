@@ -25,8 +25,14 @@ logger = logging.getLogger("academic-assistant")
 # explicitly plus the local Vite dev server for development.
 ALLOWED_ORIGINS = [
     "https://academic-assistant-production-35e4.up.railway.app",
+    # Vite dev server.
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    # Vite preview server, which the E2E suite builds and serves the frontend
+    # from. The built bundle calls this deployed API, so that origin needs to
+    # be allowed or the search test fails CORS preflight.
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
 ]
 
 # Topic bounds. The minimum mirrors the frontend's own check so a direct API
