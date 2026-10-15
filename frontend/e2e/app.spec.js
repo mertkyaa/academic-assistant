@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 // The synthesis test uses the cached "transformer architecture" topic, so it is
 // free (no Claude pipeline run) as long as that entry is warm in the cache.
 
-test.describe("Academic Paper Assistant — live E2E", () => {
+test.describe("Academic Research Assistant — live E2E", () => {
   test("API health and static assets are served from the single service", async ({ request }) => {
     const health = await request.get("/api/health");
     expect(health.ok()).toBeTruthy();
@@ -20,7 +20,7 @@ test.describe("Academic Paper Assistant — live E2E", () => {
   test("landing page shows the search UI directly (no login required)", async ({ page }) => {
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "Academic Paper Assistant" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Academic Research Assistant" })).toBeVisible();
     await expect(page.getByPlaceholder("Enter a research topic...")).toBeVisible();
     await expect(page.getByRole("button", { name: "Search" })).toBeVisible();
 

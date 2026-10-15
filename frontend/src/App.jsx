@@ -359,7 +359,7 @@ function App() {
       <div className="bg-gradient-to-r from-blue-700 to-indigo-800
                       text-white py-10 px-4 text-center">
         <h1 className="text-4xl font-bold tracking-tight font-heading">
-          Academic Paper Assistant
+          Academic Research Assistant
         </h1>
         <p className="mt-2 text-blue-200 text-lg">
           Search, filter, and synthesize research papers with AI

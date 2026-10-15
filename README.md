@@ -1,4 +1,4 @@
-# Academic Paper Assistant
+# Academic Research Assistant
 
 A multi-agent research assistant that turns a topic into a cited literature synthesis. It searches three academic databases, scores the results for relevance, extracts evidence from each abstract, and writes a structured overview aimed at a student meeting the field for the first time.
 
